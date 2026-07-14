@@ -1,0 +1,6 @@
+.zig-cache/
+zig-out/
+*.o
+
+aviutl2_sdk/
+legacy/
