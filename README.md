@@ -58,6 +58,6 @@ buffers directly.
 
 ## License
 
-Simple LUT 0.4.0 is a complete rewrite out of the original ffmpeg implementation, which follows the LGPLv2.1 license.
+Simple LUT 0.4.0 is a complete rewrite out of the original ffmpeg implementation, which follows the [LGPLv2.1 license](./LICENSE).
 
 Versions before 0.4.0 are based on the implementation [here](https://github.com/cpuimage/FFmpeg_Lut3D/), which follows GPLv2.1 license.
