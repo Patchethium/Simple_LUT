@@ -1,203 +1,95 @@
 const std = @import("std");
 const lut_math = @import("lut_math.zig");
-const c = @cImport({
+pub const c = @cImport({
     @cInclude("png.h");
-    @cInclude("stdio.h");
 });
 
-pub const Rgb = lut_math.Rgb;
-pub const Interpolation = enum { nearest, tetrahedral, trilinear };
+pub const Pixel = extern struct { r: u8, g: u8, b: u8, a: u8 };
 
-pub const Lut = struct {
-    size: usize,
-    values: []Rgb,
+const usage =
+    \\Usage: {0s} <input.png> <lut.cube|lut.3dl|lut.m3d> <output.png> [nearest|tetrahedral|trilinear] [strength]
+    \\       {0s} --diff <a.png> <b.png> [max-allowed]
+    \\
+;
 
-    fn at(self: *const Lut, r: usize, g: usize, b: usize) Rgb {
-        return self.values[(r * self.size + g) * self.size + b];
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(allocator);
+    const program = if (args.len > 0) args[0] else "simple-lut";
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "--diff")) {
+        if (args.len < 4 or args.len > 5) return usageError(program);
+        const allowed = if (args.len == 5) try std.fmt.parseInt(u8, args[4], 10) else 1;
+        return diff(allocator, args[2], args[3], allowed);
     }
-};
 
-pub fn main(init: std.process.Init.Minimal) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    if (args.len < 4 or args.len > 6) return usageError(program);
+    const mode = if (args.len >= 5) parseMode(args[4]) orelse return usageError(program) else .tetrahedral;
+    const strength = if (args.len == 6) try std.fmt.parseFloat(f32, args[5]) else 1;
+    var lut = lut_math.loadFile(init.io, allocator, args[2]) catch |err| {
+        std.debug.print("Cannot load LUT {s}: {s}\n", .{ args[2], @errorName(err) });
+        return err;
+    };
+    defer lut.deinit(allocator);
 
-    var args = try std.process.Args.Iterator.initAllocator(init.args, allocator);
-    defer args.deinit();
-    const program = args.next() orelse "simple-lut";
-    const input_path = args.next() orelse {
-        try printUsage(program);
-        return error.InvalidArguments;
-    };
-    const lut_path = args.next() orelse {
-        try printUsage(program);
-        return error.InvalidArguments;
-    };
-    const output_path = args.next() orelse {
-        try printUsage(program);
-        return error.InvalidArguments;
-    };
-    const mode = args.next();
-    if (args.next() != null) {
-        try printUsage(program);
-        return error.InvalidArguments;
-    }
-    const interpolation = if (mode) |value| try parseInterpolation(value) else .tetrahedral;
-    const lut = try loadLut(allocator, lut_path);
-    try transformPng(allocator, input_path, output_path, &lut, interpolation);
+    const image = try readPng(allocator, args[1]);
+    lut_math.processPixels(Pixel, image.pixels, image.width, image.height, &lut, mode, strength);
+    try writePng(args[3], image);
 }
 
-fn printUsage(program: []const u8) !void {
-    std.debug.print(
-        "Usage: {s} <input.png> <lut.cube|lut.3dl|lut.m3d> <output.png> [nearest|tetrahedral|trilinear]\n",
-        .{program},
-    );
+fn usageError(program: []const u8) error{InvalidArguments} {
+    std.debug.print(usage, .{program});
+    return error.InvalidArguments;
 }
 
-fn parseInterpolation(value: []const u8) !Interpolation {
-    if (std.mem.eql(u8, value, "nearest")) return .nearest;
-    if (std.mem.eql(u8, value, "tetrahedral")) return .tetrahedral;
-    if (std.mem.eql(u8, value, "trilinear")) return .trilinear;
-    return error.InvalidInterpolation;
+fn parseMode(value: []const u8) ?lut_math.Mode {
+    return std.meta.stringToEnum(lut_math.Mode, value);
 }
 
-pub fn loadLut(allocator: std.mem.Allocator, path: []const u8) !Lut {
-    if (std.ascii.endsWithIgnoreCase(path, ".cube")) return loadCube(allocator, path);
+pub const Image = struct { width: usize, height: usize, pixels: []Pixel };
+
+pub fn readPng(allocator: std.mem.Allocator, path: []const u8) !Image {
     const path_z = try allocator.dupeZ(u8, path);
-    const fixed = lut_math.loadLut(path_z.ptr) orelse return error.InvalidLut;
-    defer std.heap.c_allocator.destroy(fixed);
-    const size: usize = @intCast(fixed.size);
-    const values = try allocator.alloc(Rgb, size * size * size);
-    for (0..size) |r| for (0..size) |g| for (0..size) |b| {
-        values[(r * size + g) * size + b] = fixed.values[r][g][b];
-    };
-    return .{ .size = size, .values = values };
-}
-
-fn loadCube(allocator: std.mem.Allocator, path: []const u8) !Lut {
-    const contents = try readFile(allocator, path);
-    var size: ?usize = null;
-    var domain_min = Rgb{ .r = 0, .g = 0, .b = 0 };
-    var domain_max = Rgb{ .r = 1, .g = 1, .b = 1 };
-    var values: ?[]Rgb = null;
-    var index: usize = 0;
-    var line_number: usize = 0;
-
-    var lines = std.mem.splitScalar(u8, contents, '\n');
-    while (lines.next()) |raw_line| {
-        line_number += 1;
-        const line = std.mem.trim(u8, raw_line, " \t\r");
-        if (line.len == 0 or line[0] == '#') continue;
-
-        var tokens = std.mem.tokenizeAny(u8, line, " \t\r");
-        const first = tokens.next() orelse continue;
-        if (std.mem.eql(u8, first, "TITLE")) continue;
-        if (std.mem.eql(u8, first, "LUT_3D_SIZE")) {
-            if (size != null or values != null) return error.InvalidCube;
-            const parsed_size = std.fmt.parseInt(usize, tokens.next() orelse return error.InvalidCube, 10) catch return error.InvalidCube;
-            if (parsed_size < 2 or parsed_size > 64) return error.UnsupportedLutSize;
-            size = parsed_size;
-            values = try allocator.alloc(Rgb, parsed_size * parsed_size * parsed_size);
-            continue;
-        }
-        if (std.mem.eql(u8, first, "DOMAIN_MIN")) {
-            domain_min = try parseRgb(&tokens);
-            continue;
-        }
-        if (std.mem.eql(u8, first, "DOMAIN_MAX")) {
-            domain_max = try parseRgb(&tokens);
-            continue;
-        }
-
-        const lut_values = values orelse continue;
-        if (index >= lut_values.len) return error.InvalidCube;
-        var rgb = parseRgbWithFirst(first, &tokens) catch {
-            std.debug.print("Invalid .cube data on line {d}: {s}\n", .{ line_number, line });
-            return error.InvalidCube;
-        };
-        rgb.r *= domain_max.r - domain_min.r;
-        rgb.g *= domain_max.g - domain_min.g;
-        rgb.b *= domain_max.b - domain_min.b;
-        // .cube records advance red first; the original C++ stores them as lut[r][g][b].
-        const r = index % size.?;
-        const g = (index / size.?) % size.?;
-        const b = index / (size.? * size.?);
-        lut_values[(r * size.? + g) * size.? + b] = rgb;
-        index += 1;
-    }
-
-    const lut_values = values orelse return error.MissingLutSize;
-    if (index != lut_values.len) return error.IncompleteCube;
-    return .{ .size = size.?, .values = lut_values };
-}
-
-fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const path_z = try allocator.dupeZ(u8, path);
-    const file = c.fopen(path_z.ptr, "rb") orelse return error.FileNotFound;
-    defer _ = c.fclose(file);
-    if (c.fseek(file, 0, c.SEEK_END) != 0) return error.FileReadFailed;
-    const length = c.ftell(file);
-    if (length < 0 or length > 16 * 1024 * 1024) return error.FileTooLarge;
-    if (c.fseek(file, 0, c.SEEK_SET) != 0) return error.FileReadFailed;
-    const contents = try allocator.alloc(u8, @intCast(length));
-    if (c.fread(contents.ptr, 1, contents.len, file) != contents.len) return error.FileReadFailed;
-    return contents;
-}
-
-fn parseRgb(tokens: anytype) !Rgb {
-    return .{
-        .r = std.fmt.parseFloat(f32, tokens.next() orelse return error.InvalidCube) catch return error.InvalidCube,
-        .g = std.fmt.parseFloat(f32, tokens.next() orelse return error.InvalidCube) catch return error.InvalidCube,
-        .b = std.fmt.parseFloat(f32, tokens.next() orelse return error.InvalidCube) catch return error.InvalidCube,
-    };
-}
-
-fn parseRgbWithFirst(first: []const u8, tokens: anytype) !Rgb {
-    return .{
-        .r = std.fmt.parseFloat(f32, first) catch return error.InvalidCube,
-        .g = std.fmt.parseFloat(f32, tokens.next() orelse return error.InvalidCube) catch return error.InvalidCube,
-        .b = std.fmt.parseFloat(f32, tokens.next() orelse return error.InvalidCube) catch return error.InvalidCube,
-    };
-}
-
-fn transformPng(allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, lut: *const Lut, interpolation: Interpolation) !void {
-    const input_z = try allocator.dupeZ(u8, input_path);
-    const output_z = try allocator.dupeZ(u8, output_path);
+    defer allocator.free(path_z);
     var image: c.png_image = std.mem.zeroes(c.png_image);
     image.version = c.PNG_IMAGE_VERSION;
-    if (c.png_image_begin_read_from_file(&image, input_z.ptr) == 0) return error.PngReadFailed;
+    if (c.png_image_begin_read_from_file(&image, path_z.ptr) == 0) return error.PngReadFailed;
     defer c.png_image_free(&image);
-
     image.format = c.PNG_FORMAT_RGBA;
-    const byte_count = @as(usize, @intCast(image.width)) * @as(usize, @intCast(image.height)) * 4;
-    const pixels = try allocator.alloc(u8, byte_count);
+    const width: usize = image.width;
+    const height: usize = image.height;
+    const pixels = try allocator.alloc(Pixel, width * height);
+    errdefer allocator.free(pixels);
     if (c.png_image_finish_read(&image, null, pixels.ptr, 0, null) == 0) return error.PngReadFailed;
+    return .{ .width = width, .height = height, .pixels = pixels };
+}
 
-    var offset: usize = 0;
-    while (offset < pixels.len) : (offset += 4) {
-        if (pixels[offset + 3] == 0) continue;
-        const input = Rgb{
-            .r = @floatFromInt(pixels[offset]),
-            .g = @floatFromInt(pixels[offset + 1]),
-            .b = @floatFromInt(pixels[offset + 2]),
-        };
-        const output = applyLut(lut, input, interpolation);
-        pixels[offset] = toByte(output.r);
-        pixels[offset + 1] = toByte(output.g);
-        pixels[offset + 2] = toByte(output.b);
+fn writePng(path: []const u8, source: Image) !void {
+    var path_buffer: [std.fs.max_path_bytes:0]u8 = undefined;
+    const path_z = try std.fmt.bufPrintZ(&path_buffer, "{s}", .{path});
+    var image: c.png_image = std.mem.zeroes(c.png_image);
+    image.version = c.PNG_IMAGE_VERSION;
+    image.width = @intCast(source.width);
+    image.height = @intCast(source.height);
+    image.format = c.PNG_FORMAT_RGBA;
+    if (c.png_image_write_to_file(&image, path_z.ptr, 0, source.pixels.ptr, 0, null) == 0) return error.PngWriteFailed;
+}
+
+/// Compares the RGB channels of two same-sized PNGs; fails when any channel differs by more than `allowed`.
+fn diff(allocator: std.mem.Allocator, a_path: []const u8, b_path: []const u8, allowed: u8) !void {
+    const a = try readPng(allocator, a_path);
+    const b = try readPng(allocator, b_path);
+    if (a.width != b.width or a.height != b.height) return error.SizeMismatch;
+    var largest: u8 = 0;
+    var total: u64 = 0;
+    for (a.pixels, b.pixels) |left, right| {
+        for ([_]u8{ left.r, left.g, left.b }, [_]u8{ right.r, right.g, right.b }) |x, y| {
+            const difference = @max(x, y) - @min(x, y);
+            largest = @max(largest, difference);
+            total += difference;
+        }
     }
-
-    if (c.png_image_write_to_file(&image, output_z.ptr, 0, pixels.ptr, 0, null) == 0) return error.PngWriteFailed;
-}
-
-pub fn applyLut(lut: *const Lut, input: Rgb, interpolation: Interpolation) Rgb {
-    return lut_math.interpolate(Lut, lut, input, @intFromEnum(interpolation) + 1, lookup);
-}
-
-pub fn toByte(value: f32) u8 {
-    return lut_math.toByte(value);
-}
-
-fn lookup(lut: *const Lut, r: usize, g: usize, b: usize) Rgb {
-    return lut.at(r, g, b);
+    const mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(a.pixels.len * 3));
+    std.debug.print("mean {d:.3} max {d}\n", .{ mean, largest });
+    if (largest > allowed) return error.DifferenceTooLarge;
 }

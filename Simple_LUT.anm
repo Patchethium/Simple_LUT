@@ -1,66 +1,26 @@
--- track0:Strength,0,100,100,1
--- track1:Type,1,3,2,1
--- track2:AMP,0,1,1,1
--- file:
-obj.setfont("SimHei", 55)
+--track0:Strength,0,100,100,1
+--track1:Type,1,3,2,1
+--file:
 
-local f = tostring(file)
-if f == 'nil' then
+local f = file
+if f == nil or f == "" then
     return
-else
-    local str = string.lower(f:match(".+%.(%w+)$"))
-    local ext = {"dat", "3dl", "cube", "m3d"}
-    local index = -1
-    local s = obj.track0
-    local a = obj.track2
-    s = s / 100
-    for k, v in pairs(ext) do
-        if v == str then
-            index = k
-            break
-        end
-    end
-    if index == -1 then
-        return
-    end
-    require("Simple_LUT")
-
-    local cur_dir = Simple_LUT.getDir() -- get current dictionary from c
-    cur_dir = cur_dir .. "\\script\\?.dll" -- turn the current dir into script dir
-    package.cpath = package.cpath .. ";" .. cur_dir -- add in search path the script dir for the Extram
-
-    if not pcall(require, "Extram") then
-        -- if failed finding Extram(not installed), proceed without cache
-        local data, w, h = obj.getpixeldata()
-        local asg_lut, size = Simple_LUT.LUT(data, w, h, s, obj.track1, index, f, a, false, nil)
-        obj.putpixeldata(data)
-        return
-        -- still aviutl crashes when Extram is not installed properly
-    end
-    -- has Extram
-    local meta = Extram.meta[f]
-    if tostring(meta) == 'nil' then
-        -- no proper cache for current file, parse and put it into Extram
-        local data, w, h = obj.getpixeldata()
-        local asg_lut, size = Simple_LUT.LUT(data, w, h, s, obj.track1, index, f, a, false, nil)
-        if tostring(asg_lut) == 'nil' then
-            return
-        end
-        Extram.put(f, asg_lut, size)
-        Extram.meta[f] = {
-            size = size
-        }
-        obj.putpixeldata(data)
-        return
-    end
-    -- found the cache, grab it from Extram and keep process with file
-    local data, w, h = obj.getpixeldata()
-    local asg_lut = Simple_LUT.getBuffer(meta.size) -- take a buffer to hold lut file cache
-    Extram.get(f, asg_lut, meta.size)
-    Simple_LUT.LUT(data, w, h, s, obj.track1, index, f, a, true, asg_lut)
-    obj.putpixeldata(data)
 end
-return
--- No recycles so the ram usage grows unlimitedly as we add more lut files in history.
--- I'm considering not to fix it, since we don't seem to have a method to find out which one should be deleted.
--- And one file only takes 3MB, which is rather a small amount in current PCs.
+local ext = f:match("%.(%w+)$")
+if ext == nil then
+    return
+end
+ext = string.lower(ext)
+if ext ~= "cube" and ext ~= "3dl" and ext ~= "m3d" then
+    return
+end
+
+require("Simple_LUT")
+-- Parsed LUTs are cached inside Simple_LUT.dll and reloaded when the file changes on disk.
+local data, w, h = obj.getpixeldata()
+local ok, err = Simple_LUT.LUT(data, w, h, obj.track0 / 100, obj.track1, f)
+if ok then
+    obj.putpixeldata(data)
+else
+    debug_print("Simple_LUT: " .. tostring(err) .. " (" .. f .. ")")
+end

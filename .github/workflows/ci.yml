@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: sudo apt-get update && sudo apt-get install -y libpng-dev ffmpeg
+      - run: zig build test
+      - run: zig build golden
+      - run: zig build plugin aviutl2 -Doptimize=ReleaseSmall
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Build lua51.dll (32-bit) from the official Lua 5.1.5 source
+        run: |
+          curl -fsSL https://www.lua.org/ftp/lua-5.1.5.tar.gz -o lua.tgz
+          echo "2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333  lua.tgz" | sha256sum -c -
+          tar xzf lua.tgz
+          cd lua-5.1.5/src
+          zig cc -target x86-windows-gnu -O2 -shared -DLUA_BUILD_AS_DLL -o "$GITHUB_WORKSPACE/lua51.dll" $(ls *.c | grep -v -e '^lua.c$' -e '^luac.c$')
+      - run: LUA51_DLL="$GITHUB_WORKSPACE/lua51.dll" sh tools/run_harness.sh
