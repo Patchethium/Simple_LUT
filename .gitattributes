@@ -1,0 +1,2 @@
+# AviUtl/ExEdit only reads .anm scripts with CRLF line endings; keep the bytes as committed.
+*.anm -text
