@@ -57,8 +57,16 @@ first.
 zig build aviutl2 -Doptimize=ReleaseSmall
 ```
 
-Copy `zig-out/bin/Simple_LUT.auf2` to AviUtl2's `Plugin` directory. The filter provides a LUT file
-picker, strength, and interpolation controls. It caches up to four LUTs and opens paths with
+Copy `zig-out/bin/Simple_LUT.auf2` to the `Plugin` folder inside AviUtl2's data folder, then
+restart AviUtl2:
+
+- Installed version: `C:\ProgramData\aviutl2\Plugin`
+- Portable version (a `data` folder next to `aviutl2.exe`): `data\Plugin`. A `Plugin` folder next
+  to `aviutl2.exe` itself is not scanned.
+
+Alternatively, drag the `.auf2` onto AviUtl2's preview window to install it into the right folder.
+
+The filter provides a LUT file picker, strength, and interpolation controls. It caches up to four LUTs and opens paths with
 wide-character APIs, so non-ASCII folder names work.
 
 ## Testing
