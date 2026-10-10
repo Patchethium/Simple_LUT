@@ -29,7 +29,7 @@
 
 ### AviUtl (legacy) plugin
 
-- Parsed LUTs are cached inside the DLL (4 entries, reloaded when the file changes on disk); the
+- Parsed LUTs are cached inside the DLL (16 entries, reloaded when the file changes on disk); the
   Extram dependency is gone.
 - `Simple_LUT.LUT(data, w, h, strength, type, path)` returns `true`, or `nil` and an error
   message. `getBuffer` was removed. `getDir` returns AviUtl's directory rather than the current
@@ -39,7 +39,7 @@
 
 ### AviUtl2 filter
 
-- The single-slot cache was replaced with a locked 4-entry cache, so several objects with
+- The single-slot cache was replaced with a locked 16-entry cache, so several objects with
   different LUTs no longer reparse every frame.
 - Struct layouts are checked against the SDK headers at compile time.
 

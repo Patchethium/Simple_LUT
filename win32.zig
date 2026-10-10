@@ -85,11 +85,14 @@ const Loader = struct {
     }
 };
 
+/// Parsed LUTs kept per process: about 0.4 MB each at 33 points, 3.3 MB at 65.
+pub const cache_slots = 16;
+
 /// Process-wide LUT cache. `acquire` returns with the lock held; call `release` once the
 /// returned LUT is no longer used.
 pub const SharedCache = struct {
     lock: SrwLock = .{},
-    cache: lut_cache.Cache(u16, 4) = .{},
+    cache: lut_cache.Cache(u16, cache_slots) = .{},
 
     pub fn acquire(self: *SharedCache, path: [:0]const u16) !*const lut_math.Lut {
         AcquireSRWLockExclusive(&self.lock);
