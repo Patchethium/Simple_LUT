@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1
+
+### Performance
+
+- Worker threads now scale with the machine: one per logical CPU, up to 16 (was a fixed cap of
+  8), with at least 32,768 pixels per thread so small frames use fewer threads. On an
+  8-core/16-thread CPU, a 1800×1200 frame with the default tetrahedral mode takes ~6.6 ms instead of
+  ~8.5 ms. Output is unchanged.
+
 ## 0.5.0
 
 ### Behavior changes

@@ -25,7 +25,7 @@ compares two images.
 
 ## Benchmark
 
-Times the multithreaded pixel kernel the plugins use (up to eight workers). PNG decoding and LUT
+Times the multithreaded pixel kernel the plugins use (one thread per logical CPU, up to 16). PNG decoding and LUT
 loading happen before timing starts.
 
 ```sh

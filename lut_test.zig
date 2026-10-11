@@ -265,7 +265,7 @@ test "multithreaded output is identical to single-threaded" {
         @memcpy(threaded, source);
         @memcpy(serial, source);
         lut_math.processPixels(Rgba, threaded, width, height, &lut, mode, 0.75);
-        // One row at a time stays under the threading threshold.
+        // A single row is too small to split across threads.
         for (0..height) |row| lut_math.processPixels(Rgba, serial[row * width ..][0..width], width, 1, &lut, mode, 0.75);
         try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(serial), std.mem.sliceAsBytes(threaded));
     }

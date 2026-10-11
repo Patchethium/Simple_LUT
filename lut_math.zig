@@ -414,7 +414,11 @@ pub fn toByte(value: f32) u8 {
     return @intFromFloat(@round(std.math.clamp(value, 0, 1) * 255.0));
 }
 
-pub const max_workers = 8;
+pub const max_workers = 64;
+/// Measured on an 8-core/16-thread CPU, tetrahedral (the default mode) runs ~22% faster on all
+/// 16 logical CPUs than on 8. Past 16, per-frame thread start-up outweighs the gain for typical
+/// frame sizes.
+pub const default_max_workers = 16;
 
 /// A joinable worker thread. On Windows it uses kernel32 directly: Zig 0.16's `std.Thread.join`
 /// waits with a huge negative timeout that Wine answers with STATUS_TIMEOUT, which panics.
@@ -450,16 +454,27 @@ const Worker = if (@import("builtin").os.tag == .windows) struct {
         self.thread.join();
     }
 };
-pub const parallel_threshold = 65_536;
+/// Each worker gets at least this many pixels, so small frames use fewer threads (or just one).
+pub const min_pixels_per_worker = 32_768;
 
 /// Applies `lut` in place. `Pixel` is any struct with `r`, `g`, `b`, `a: u8` fields, in any
 /// order. Pixels with zero alpha are left untouched. Blending happens in float and rounds once.
 pub fn processPixels(comptime Pixel: type, pixels: []Pixel, width: usize, height: usize, lut: *const Lut, mode: Mode, strength: f32) void {
+    processPixelsWith(Pixel, pixels, width, height, lut, mode, strength, defaultWorkers());
+}
+
+/// Upper bound on the threads `processPixels` uses: every logical CPU, up to `default_max_workers`.
+pub fn defaultWorkers() usize {
+    return @min(std.Thread.getCpuCount() catch 1, default_max_workers);
+}
+
+/// `processPixels` with an explicit thread count, for benchmarks and tests.
+pub fn processPixelsWith(comptime Pixel: type, pixels: []Pixel, width: usize, height: usize, lut: *const Lut, mode: Mode, strength: f32, threads: usize) void {
     std.debug.assert(pixels.len >= width * height);
     if (!(strength > 0) or width == 0 or height == 0) return;
     const job = Job(Pixel){ .pixels = pixels.ptr, .width = width, .sampler = .init(lut), .strength = @min(strength, 1) };
     switch (mode) {
-        inline else => |comptime_mode| if (job.strength == 1) job.run(comptime_mode, false, height) else job.run(comptime_mode, true, height),
+        inline else => |comptime_mode| if (job.strength == 1) job.run(comptime_mode, false, height, threads) else job.run(comptime_mode, true, height, threads),
     }
 }
 
@@ -474,24 +489,24 @@ fn Job(comptime Pixel: type) type {
 
         const Range = struct { job: *const Self, start: usize, end: usize };
 
-        fn run(self: *const Self, comptime mode: Mode, comptime blend: bool, height: usize) void {
-            const workers = if (self.width * height < parallel_threshold) 1 else @min(std.Thread.getCpuCount() catch 1, max_workers, height);
+        fn run(self: *const Self, comptime mode: Mode, comptime blend: bool, height: usize, threads: usize) void {
+            const workers = std.math.clamp(@min(threads, self.width * height / min_pixels_per_worker), 1, @min(max_workers, height));
             const entry = struct {
                 fn call(range: *const Range) void {
                     range.job.rows(mode, blend, range.start, range.end);
                 }
             }.call;
             var ranges: [max_workers]Range = undefined;
-            var threads: [max_workers - 1]?Worker = @splat(null);
+            var handles: [max_workers - 1]?Worker = @splat(null);
             for (1..workers) |worker| {
                 ranges[worker] = .{ .job = self, .start = height * worker / workers, .end = height * (worker + 1) / workers };
-                threads[worker - 1] = Worker.spawn(Range, entry, &ranges[worker]) catch blk: {
+                handles[worker - 1] = Worker.spawn(Range, entry, &ranges[worker]) catch blk: {
                     entry(&ranges[worker]);
                     break :blk null;
                 };
             }
             self.rows(mode, blend, 0, height / workers);
-            for (threads[0 .. workers - 1]) |thread| if (thread) |handle| handle.join();
+            for (handles[0 .. workers - 1]) |handle| if (handle) |worker| worker.join();
         }
 
         fn rows(self: *const Self, comptime mode: Mode, comptime blend: bool, start: usize, end: usize) void {

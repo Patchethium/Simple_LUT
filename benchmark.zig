@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init) !void {
     const working = try allocator.alloc(png.Pixel, image.pixels.len);
 
     const pixel_count = image.width * image.height;
-    const workers = if (pixel_count < lut_math.parallel_threshold) 1 else @min(std.Thread.getCpuCount() catch 1, lut_math.max_workers);
+    const workers = std.math.clamp(@min(lut_math.defaultWorkers(), pixel_count / lut_math.min_pixels_per_worker), 1, image.height);
     std.debug.print(
         "Benchmarking {d} x {d} image, {d} iterations, up to {d} workers; PNG decoding and LUT loading excluded.\n",
         .{ image.width, image.height, iterations, workers },

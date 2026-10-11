@@ -26,7 +26,7 @@ zig build run -- test/sample.png test/MagicHour.cube test/output.png tetrahedral
 
 ## ベンチマーク
 
-プラグインと同じマルチスレッドのピクセル処理（最大 8 スレッド）の速度を測ります。PNG の読み込みと
+プラグインと同じマルチスレッドのピクセル処理（論理 CPU 数のスレッド、最大 16）の速度を測ります。PNG の読み込みと
 LUT の読み込みは計測の前に済ませます。
 
 ```sh
